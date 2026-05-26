@@ -18,23 +18,9 @@ class OrientationCorrector:
             image,
             self._settings.local_ocr_timeout_seconds,
         )
-        if osd_rotation in ROTATION_CANDIDATES:
-            rotated_image = _rotate(image, osd_rotation)
-            local_ocr = self._local_ocr.extract(
-                rotated_image,
-                self._settings.local_ocr_timeout_seconds,
-            )
-            return OrientationResult(
-                image=rotated_image,
-                detected_degrees=osd_rotation,
-                corrected=osd_rotation != 0,
-                method="tesseract_osd",
-                local_ocr=local_ocr,
-            )
+        return self._score_rotations(image, osd_rotation)
 
-        return self._score_rotations(image)
-
-    def _score_rotations(self, image: Image.Image) -> OrientationResult:
+    def _score_rotations(self, image: Image.Image, osd_rotation: int | None) -> OrientationResult:
         best_rotation: RotationDegrees = 0
         best_image = image
         best_ocr: OcrResult | None = None
@@ -54,11 +40,12 @@ class OrientationCorrector:
                 best_score = score
 
         assert best_ocr is not None, "rotation candidates must produce an OCR result"
+        method = "tesseract_osd" if best_rotation == osd_rotation else "rotation_scoring"
         return OrientationResult(
             image=best_image,
             detected_degrees=best_rotation,
             corrected=best_rotation != 0,
-            method="rotation_scoring",
+            method=method,
             local_ocr=best_ocr,
         )
 

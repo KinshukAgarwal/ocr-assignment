@@ -37,7 +37,7 @@ class ConfidenceInfo(BaseModel):
 
 
 class ValidationInfo(BaseModel):
-    status: Literal["not_implemented"] = "not_implemented"
+    status: Literal["passed", "failed", "not_evaluated"]
     issues: list[str] = Field(default_factory=list)
 
 

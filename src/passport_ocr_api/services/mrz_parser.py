@@ -14,6 +14,7 @@ TWO_DIGIT_YEAR_CURRENT_CENTURY_CUTOFF = 50
 COMPLETE_MRZ_SCORE = 2.0
 PARTIAL_MRZ_SCORE = 1.0
 MRZ_PATTERN_SCORE = 0.5
+MRZ_CHECK_DIGIT_WEIGHTS = (7, 3, 1)
 
 
 class MrzPassportParser:
@@ -62,12 +63,36 @@ def score_passport_text(text: str) -> float:
     return 0.0
 
 
+def calculate_mrz_check_digit(value: str) -> str:
+    total = 0
+    for index, char in enumerate(value):
+        weight = MRZ_CHECK_DIGIT_WEIGHTS[index % len(MRZ_CHECK_DIGIT_WEIGHTS)]
+        total += _mrz_character_value(char) * weight
+    return str(total % 10)
+
+
+def has_valid_mrz_check_digit(value: str, check_digit: str) -> bool:
+    if not check_digit.isdigit():
+        return False
+    return calculate_mrz_check_digit(value) == check_digit
+
+
 def _looks_like_mrz_line(value: str) -> bool:
     if len(value) < MIN_MRZ_LINE_LENGTH:
         return False
     if MRZ_CHAR_PATTERN.fullmatch(value) is None:
         return False
     return "<" in value
+
+
+def _mrz_character_value(char: str) -> int:
+    if char == "<":
+        return 0
+    if char.isdigit():
+        return int(char)
+    if "A" <= char <= "Z":
+        return ord(char) - ord("A") + 10
+    return 0
 
 
 def _best_mrz_pair(candidates: list[str]) -> list[str]:
