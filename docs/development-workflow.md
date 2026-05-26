@@ -12,6 +12,7 @@
 Run these before committing:
 
 ```bash
+sudo apt-get install tesseract-ocr tesseract-ocr-eng tesseract-ocr-osd fonts-dejavu-core
 ruff check .
 mypy src tests
 pytest

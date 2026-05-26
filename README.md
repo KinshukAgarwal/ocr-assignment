@@ -1,6 +1,6 @@
 # Passport OCR API
 
-FastAPI module for passport OCR extraction with bounded upload handling, orientation correction, local Tesseract OCR, Google Vision fallback, structured JSON output, and a validation placeholder.
+FastAPI module for passport OCR extraction with bounded upload handling, orientation correction, local Tesseract OCR, Google Vision fallback, structured JSON output, and ICAO TD3 MRZ validation.
 
 ## Run locally
 
@@ -11,10 +11,10 @@ python -m pip install -e ".[dev]"
 uvicorn passport_ocr_api.main:app --reload
 ```
 
-Tesseract must be installed on the host for local OCR:
+Tesseract and a monospace font must be installed on the host for local OCR and integration tests:
 
 ```bash
-sudo apt-get install tesseract-ocr
+sudo apt-get install tesseract-ocr tesseract-ocr-eng tesseract-ocr-osd fonts-dejavu-core
 ```
 
 Google Vision fallback uses standard Google Application Default Credentials when `PASSPORT_OCR_GOOGLE_FALLBACK_ENABLED=true`.
@@ -64,6 +64,14 @@ Accepted content types:
 - Google OCR timeout: 15 seconds
 - Google fallback retries: 1
 - No persistence of uploaded documents or OCR results
+
+## Validation
+
+The response validates TD3 passport MRZ check digits when both MRZ lines are extracted:
+
+- `passed`: all supported MRZ check digits match
+- `failed`: at least one supported MRZ check digit is invalid
+- `not_evaluated`: MRZ lines were not available
 
 ## Quality checks
 

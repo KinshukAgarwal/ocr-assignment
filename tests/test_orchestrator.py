@@ -48,7 +48,7 @@ class FakeParser:
 
 class FakeValidator:
     def validate(self, extraction: PassportExtraction) -> ValidationInfo:
-        return ValidationInfo()
+        return ValidationInfo(status="not_evaluated", issues=[])
 
 
 class FakeCloud:
