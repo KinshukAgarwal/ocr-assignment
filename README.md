@@ -19,6 +19,27 @@ sudo apt-get install tesseract-ocr
 
 Google Vision fallback uses standard Google Application Default Credentials when `PASSPORT_OCR_GOOGLE_FALLBACK_ENABLED=true`.
 
+## Run with Docker
+
+The Docker image installs system Tesseract so OCR does not depend on host packages.
+
+```bash
+docker build -t passport-ocr-api:local .
+docker run --rm -p 8000:8000 passport-ocr-api:local
+```
+
+Or use Compose:
+
+```bash
+docker compose up --build
+```
+
+Then verify:
+
+```bash
+curl http://127.0.0.1:8000/healthz
+```
+
 ## Endpoint
 
 ```http
