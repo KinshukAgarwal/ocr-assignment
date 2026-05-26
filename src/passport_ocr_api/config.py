@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     google_ocr_timeout_seconds: int = Field(default=15, ge=1, le=60)
     google_max_retries: int = Field(default=1, ge=0, le=2)
     google_fallback_enabled: bool = False
+    google_vision_api_key: str | None = None
+    google_vision_rest_endpoint: str = "https://vision.googleapis.com/v1/images:annotate"
     low_confidence_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
     circuit_breaker_failure_threshold: int = Field(default=3, ge=1, le=10)
     circuit_breaker_reset_seconds: int = Field(default=60, ge=1, le=600)

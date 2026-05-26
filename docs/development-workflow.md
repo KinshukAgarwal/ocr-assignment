@@ -39,6 +39,10 @@ Verify health:
 curl http://127.0.0.1:8000/healthz
 ```
 
+## Google Vision Fallback
+
+Use `PASSPORT_OCR_GOOGLE_VISION_API_KEY` for API-key based fallback, or leave it empty and configure Google Application Default Credentials. Keep real credentials in `.env` or deployment secrets only; `.env` is ignored by Git.
+
 ## Remote Setup
 
 After creating a remote repository, connect it once:

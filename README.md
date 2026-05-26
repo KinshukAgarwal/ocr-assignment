@@ -17,7 +17,14 @@ Tesseract and a monospace font must be installed on the host for local OCR and i
 sudo apt-get install tesseract-ocr tesseract-ocr-eng tesseract-ocr-osd fonts-dejavu-core
 ```
 
-Google Vision fallback uses standard Google Application Default Credentials when `PASSPORT_OCR_GOOGLE_FALLBACK_ENABLED=true`.
+Google Vision fallback supports either an API key or standard Google Application Default Credentials when `PASSPORT_OCR_GOOGLE_FALLBACK_ENABLED=true`:
+
+```bash
+PASSPORT_OCR_GOOGLE_FALLBACK_ENABLED=true
+PASSPORT_OCR_GOOGLE_VISION_API_KEY=<api-key>
+```
+
+If no API key is configured, the module uses Google ADC through `google-cloud-vision`.
 
 ## Run with Docker
 
