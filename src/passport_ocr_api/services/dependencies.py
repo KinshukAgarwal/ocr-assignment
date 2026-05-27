@@ -2,6 +2,7 @@ from passport_ocr_api.config import Settings
 from passport_ocr_api.services.document_loader import DocumentLoader
 from passport_ocr_api.services.google_vision import GoogleVisionOcrEngine
 from passport_ocr_api.services.local_tesseract import TesseractOcrEngine
+from passport_ocr_api.services.media_extractor import PassportMediaExtractor
 from passport_ocr_api.services.mrz_parser import MrzPassportParser
 from passport_ocr_api.services.orchestrator import PassportOcrPipeline
 from passport_ocr_api.services.orientation import OrientationCorrector
@@ -16,5 +17,6 @@ def build_pipeline(settings: Settings) -> PassportOcrPipeline:
         orientation_corrector=OrientationCorrector(local_ocr, settings),
         parser=MrzPassportParser(),
         validator=PassportMrzValidator(),
+        image_extractor=PassportMediaExtractor(),
         cloud_ocr=GoogleVisionOcrEngine(settings),
     )

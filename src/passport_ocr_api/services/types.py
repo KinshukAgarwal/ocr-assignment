@@ -3,7 +3,7 @@ from typing import Literal, Protocol
 
 from PIL import Image
 
-from passport_ocr_api.schemas import PassportExtraction, ValidationInfo
+from passport_ocr_api.schemas import PassportExtraction, PassportImageExtraction, ValidationInfo
 
 RotationDegrees = Literal[0, 90, 180, 270]
 OcrEngineName = Literal["tesseract", "google_vision", "hybrid"]
@@ -62,4 +62,9 @@ class PassportParser(Protocol):
 
 class PassportValidator(Protocol):
     def validate(self, extraction: PassportExtraction) -> ValidationInfo:
+        raise NotImplementedError
+
+
+class PassportImageExtractor(Protocol):
+    def extract(self, image: Image.Image) -> PassportImageExtraction:
         raise NotImplementedError

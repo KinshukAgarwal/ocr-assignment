@@ -54,11 +54,33 @@ class OcrInfo(BaseModel):
     raw_text_snippets: list[str] = Field(default_factory=list)
 
 
+class BoundingBox(BaseModel):
+    left: int = Field(ge=0)
+    top: int = Field(ge=0)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+
+
+class ExtractedImage(BaseModel):
+    present: bool
+    content_type: Literal["image/jpeg"] = "image/jpeg"
+    data_base64: str | None = None
+    bounding_box: BoundingBox | None = None
+    confidence: ConfidenceValue
+    method: str
+
+
+class PassportImageExtraction(BaseModel):
+    portrait: ExtractedImage
+    signature: ExtractedImage
+
+
 class PassportOcrResponse(BaseModel):
     request_id: str
     document_type: Literal["passport"] = "passport"
     orientation: OrientationInfo
     extraction: PassportExtraction
+    images: PassportImageExtraction
     confidence: ConfidenceInfo
     validation: ValidationInfo
     ocr: OcrInfo

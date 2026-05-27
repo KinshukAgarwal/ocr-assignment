@@ -12,6 +12,7 @@ from passport_ocr_api.services.orientation import OrientationCorrector
 from passport_ocr_api.services.types import (
     CloudOcrEngine,
     OcrResult,
+    PassportImageExtractor,
     PassportParser,
     PassportValidator,
 )
@@ -28,6 +29,7 @@ class PassportOcrPipeline:
         orientation_corrector: OrientationCorrector,
         parser: PassportParser,
         validator: PassportValidator,
+        image_extractor: PassportImageExtractor,
         cloud_ocr: CloudOcrEngine,
     ) -> None:
         self._settings = settings
@@ -35,6 +37,7 @@ class PassportOcrPipeline:
         self._orientation_corrector = orientation_corrector
         self._parser = parser
         self._validator = validator
+        self._image_extractor = image_extractor
         self._cloud_ocr = cloud_ocr
 
     def extract(self, document: UploadedDocument, request_id: str) -> PassportOcrResponse:
@@ -61,6 +64,7 @@ class PassportOcrPipeline:
         if fallback_result is not None:
             parsed = self._parser.parse(final_ocr.text, final_ocr.confidence)
 
+        images = self._image_extractor.extract(orientation.image)
         validation = self._validator.validate(parsed.extraction)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
@@ -80,6 +84,7 @@ class PassportOcrPipeline:
                 method=orientation.method,
             ),
             extraction=parsed.extraction,
+            images=images,
             confidence=ConfidenceInfo(
                 overall=parsed.confidence,
                 fields=parsed.field_confidence,
@@ -104,6 +109,7 @@ class PassportOcrPipeline:
             request_id,
         )
         parsed = self._parser.parse(cloud_ocr.text, cloud_ocr.confidence)
+        images = self._image_extractor.extract(image)
         validation = self._validator.validate(parsed.extraction)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
@@ -123,6 +129,7 @@ class PassportOcrPipeline:
                 method="local_orientation_unavailable",
             ),
             extraction=parsed.extraction,
+            images=images,
             confidence=ConfidenceInfo(
                 overall=parsed.confidence,
                 fields=parsed.field_confidence,
