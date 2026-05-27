@@ -1,3 +1,5 @@
+import pytest
+
 from passport_ocr_api.services.mrz_parser import (
     COMPLETE_MRZ_SCORE,
     PARTIAL_MRZ_SCORE,
@@ -29,6 +31,8 @@ def test_find_mrz_lines_returns_td3_pair() -> None:
 def test_parser_extracts_icao_fields() -> None:
     parsed = MrzPassportParser().parse(SAMPLE_MRZ, confidence_hint=HIGH_CONFIDENCE)
 
+    assert parsed.extraction.type == "P"
+    assert parsed.extraction.country_code == "UTO"
     assert parsed.extraction.passport_number == "L898902C3"
     assert parsed.extraction.issuing_country == "UTO"
     assert parsed.extraction.surname == "ERIKSSON"
@@ -37,7 +41,47 @@ def test_parser_extracts_icao_fields() -> None:
     assert parsed.extraction.date_of_birth == "1974-08-12"
     assert parsed.extraction.sex == "F"
     assert parsed.extraction.date_of_expiry == "2012-04-15"
-    assert parsed.confidence == HIGH_CONFIDENCE
+    assert parsed.confidence == pytest.approx(HIGH_CONFIDENCE)
+
+
+def test_parser_merges_visible_common_passport_fields() -> None:
+    text = "\n".join(
+        [
+            "REPUBLIC OF UTOPIA",
+            "Type P Code UTO Nationality UTOPIAN",
+            "Passport No L898902C3",
+            "Surname",
+            "ERIKSSON",
+            "Given Name(s)",
+            "ANNA MARIA",
+            "Date of Birth / Sex",
+            "12/08/1974 F",
+            "Place of Birth",
+            "SAMPLE CITY",
+            "Date of Issue",
+            "01/01/2020",
+            "Date of Expiry",
+            "15/04/2012",
+            "Authority",
+            "PASSPORT OFFICE SAMPLE",
+            SAMPLE_MRZ,
+        ],
+    )
+
+    parsed = MrzPassportParser().parse(text, confidence_hint=HIGH_CONFIDENCE)
+
+    assert parsed.extraction.type == "P"
+    assert parsed.extraction.country_code == "UTO"
+    assert parsed.extraction.passport_number == "L898902C3"
+    assert parsed.extraction.surname == "ERIKSSON"
+    assert parsed.extraction.given_names == "ANNA MARIA"
+    assert parsed.extraction.nationality == "UTOPIAN"
+    assert parsed.extraction.date_of_birth == "1974-08-12"
+    assert parsed.extraction.sex == "F"
+    assert parsed.extraction.place_of_birth == "SAMPLE CITY"
+    assert parsed.extraction.date_of_issue == "2020-01-01"
+    assert parsed.extraction.date_of_expiry == "2012-04-15"
+    assert parsed.extraction.authority == "PASSPORT OFFICE SAMPLE"
 
 
 def test_parser_handles_missing_mrz() -> None:

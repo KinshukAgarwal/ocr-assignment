@@ -63,6 +63,25 @@ Accepted content types:
 - `image/webp`
 - `application/pdf`
 
+The `extraction` object uses one global passport schema, not country-specific schemas:
+
+- `type`
+- `country_code`
+- `passport_number`
+- `surname`
+- `given_names`
+- `nationality`
+- `date_of_birth`
+- `sex`
+- `place_of_birth`
+- `date_of_issue`
+- `date_of_expiry`
+- `place_of_issue`
+- `authority`
+- `holder_signature`
+- `mrz_line_1`
+- `mrz_line_2`
+
 ## Safety defaults
 
 - Max upload size: 10 MB
