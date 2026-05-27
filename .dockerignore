@@ -10,3 +10,8 @@ __pycache__/
 .uvicorn.log
 .uvicorn.pid
 tests/
+docs/*.jpeg
+docs/*.jpg
+docs/*.png
+docs/*.webp
+docs/*.pdf
