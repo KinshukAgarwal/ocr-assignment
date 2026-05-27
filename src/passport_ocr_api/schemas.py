@@ -31,9 +31,6 @@ class PassportExtraction(BaseModel):
     place_of_birth: str | None = None
     date_of_issue: str | None = None
     date_of_expiry: str | None = None
-    place_of_issue: str | None = None
-    authority: str | None = None
-    holder_signature: str | None = None
     mrz_line_1: str | None = None
     mrz_line_2: str | None = None
 

@@ -82,9 +82,6 @@ The `extraction` object uses one global passport schema, not country-specific sc
 - `place_of_birth`
 - `date_of_issue`
 - `date_of_expiry`
-- `place_of_issue`
-- `authority`
-- `holder_signature`
 - `mrz_line_1`
 - `mrz_line_2`
 
