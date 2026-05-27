@@ -47,6 +47,12 @@ Then verify:
 curl http://127.0.0.1:8000/healthz
 ```
 
+Manual browser tester:
+
+```text
+http://127.0.0.1:8000/tester
+```
+
 ## Endpoint
 
 ```http

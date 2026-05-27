@@ -13,6 +13,14 @@ def test_healthz() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_manual_tester_page_is_available() -> None:
+    response = TestClient(app).get("/tester")
+
+    assert response.status_code == HTTP_OK
+    assert "Passport OCR Tester" in response.text
+    assert "/v1/passports/ocr" in response.text
+
+
 def test_ocr_rejects_unsupported_media_type() -> None:
     response = TestClient(app).post(
         "/v1/passports/ocr",
