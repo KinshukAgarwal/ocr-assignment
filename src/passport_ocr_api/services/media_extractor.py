@@ -4,14 +4,18 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Literal
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from passport_ocr_api.schemas import BoundingBox, ExtractedImage, PassportImageExtraction
 
 GRID_COLUMNS = 64
 GRID_ROWS = 48
+STROKE_MAX_WIDTH = 360
+STROKE_MAX_HEIGHT = 180
 MAX_COMPONENTS = 256
 MAX_COMPONENT_CELLS = GRID_COLUMNS * GRID_ROWS
+MAX_STROKE_COMPONENTS = 512
+MAX_STROKE_COMPONENT_PIXELS = STROKE_MAX_WIDTH * STROKE_MAX_HEIGHT
 MIN_RGB_TUPLE_LENGTH = 3
 MIN_PORTRAIT_WIDTH_RATIO = 0.10
 MIN_PORTRAIT_HEIGHT_RATIO = 0.18
@@ -26,6 +30,7 @@ MIN_SIGNATURE_COMPONENT_WIDTH_RATIO = 0.04
 PORTRAIT_SCORE_THRESHOLD = 0.18
 SIGNATURE_DARKNESS_THRESHOLD = 0.05
 SIGNATURE_COMPONENT_CONFIDENCE = 0.55
+SIGNATURE_STROKE_CONFIDENCE = 0.75
 PORTRAIT_COMPONENT_CONFIDENCE = 0.65
 FALLBACK_CONFIDENCE = 0.2
 EXCLUDED_REGION_OVERLAP_RATIO = 0.65
@@ -73,6 +78,24 @@ SIGNATURE_PORTRAIT_TOP_RATIO = 0.55
 SIGNATURE_PORTRAIT_BOTTOM_RATIO = 1.12
 SIGNATURE_PORTRAIT_BOTTOM_PADDING_RATIO = 0.16
 SIGNATURE_DISTANCE_WEIGHT = 1.2
+SIGNATURE_STROKE_TOP_OVERLAP_RATIO = 0.18
+SIGNATURE_STROKE_BOTTOM_PADDING_RATIO = 0.26
+SIGNATURE_STROKE_LEFT_PADDING_RATIO = 0.10
+SIGNATURE_STROKE_RIGHT_PADDING_RATIO = 0.15
+SIGNATURE_STROKE_MIN_WIDTH_RATIO = 0.09
+SIGNATURE_STROKE_MAX_HEIGHT_RATIO = 0.18
+SIGNATURE_STROKE_MIN_ASPECT_RATIO = 1.20
+SIGNATURE_STROKE_MIN_PIXELS = 6
+SIGNATURE_STROKE_MIN_UNION_PIXELS = 16
+SIGNATURE_STROKE_MAX_FILL_RATIO = 0.36
+SIGNATURE_STROKE_MAX_COMPONENT_HEIGHT_RATIO = 0.62
+SIGNATURE_STROKE_MIN_COMPONENT_WIDTH_RATIO = 0.012
+SIGNATURE_STROKE_CLUSTER_VERTICAL_RATIO = 0.20
+SIGNATURE_STROKE_THRESHOLD_FLOOR = 45
+SIGNATURE_STROKE_THRESHOLD_CEILING = 150
+SIGNATURE_STROKE_THRESHOLD_OFFSET = 18
+SIGNATURE_STROKE_EXPAND_X_RATIO = 0.018
+SIGNATURE_STROKE_EXPAND_Y_RATIO = 0.025
 
 CellKind = Literal["photo", "dark"]
 
@@ -116,6 +139,22 @@ class AnalysisGrid:
     image: Image.Image
     cell_width: float
     cell_height: float
+
+
+@dataclass(frozen=True)
+class StrokeMask:
+    width: int
+    height: int
+    mask: tuple[bool, ...]
+    scale_x: float
+    scale_y: float
+    origin: Box
+
+
+@dataclass(frozen=True)
+class StrokeComponent:
+    box: Box
+    pixel_count: int
 
 
 class PassportMediaExtractor:
@@ -172,6 +211,10 @@ class PassportMediaExtractor:
         return _expand_box(refined, image, PORTRAIT_EXPAND_PADDING_RATIO)
 
     def _find_signature(self, image: Image.Image, portrait_box: Box | None) -> MediaCandidate:
+        stroke_candidate = _find_signature_stroke_candidate(image, portrait_box)
+        if stroke_candidate.box is not None:
+            return stroke_candidate
+
         grid = _build_grid(image)
         search_boxes = _signature_search_boxes(image, portrait_box)
         components = _find_components(grid, search_boxes, "dark")
@@ -444,6 +487,306 @@ def _looks_like_skin(pixel: tuple[int, int, int]) -> bool:
     )
 
 
+def _find_signature_stroke_candidate(
+    image: Image.Image,
+    portrait_box: Box | None,
+) -> MediaCandidate:
+    candidates: list[tuple[Box, int]] = []
+    for search_box in _signature_stroke_search_boxes(image, portrait_box):
+        candidate = _signature_stroke_candidate_in_box(image, search_box, portrait_box)
+        if candidate is not None:
+            candidates.append(candidate)
+
+    if not candidates:
+        return MediaCandidate(box=None, confidence=0.0, method="stroke_density_scan")
+
+    best_box, _ = max(candidates, key=lambda candidate: _signature_stroke_rank(candidate[0], image))
+    return MediaCandidate(
+        box=best_box,
+        confidence=SIGNATURE_STROKE_CONFIDENCE,
+        method="stroke_density_scan",
+    )
+
+
+def _signature_stroke_search_boxes(
+    image: Image.Image,
+    portrait_box: Box | None,
+) -> tuple[Box, ...]:
+    if portrait_box is None:
+        return (
+            _fractional_box(
+                image,
+                SIGNATURE_LEFT_RATIO,
+                SIGNATURE_TOP_RATIO,
+                SIGNATURE_RIGHT_RATIO,
+                SIGNATURE_BOTTOM_RATIO,
+            ),
+        )
+
+    left = portrait_box.left - int(portrait_box.width * SIGNATURE_STROKE_LEFT_PADDING_RATIO)
+    top = portrait_box.bottom - int(portrait_box.height * SIGNATURE_STROKE_TOP_OVERLAP_RATIO)
+    right = portrait_box.right + int(portrait_box.width * SIGNATURE_STROKE_RIGHT_PADDING_RATIO)
+    bottom = portrait_box.bottom + int(portrait_box.height * SIGNATURE_STROKE_BOTTOM_PADDING_RATIO)
+    portrait_local_box = _clamp_box(Box(left=left, top=top, right=right, bottom=bottom), image)
+    return (
+        portrait_local_box,
+        _fractional_box(
+            image,
+            SIGNATURE_LEFT_RATIO,
+            SIGNATURE_TOP_RATIO,
+            SIGNATURE_RIGHT_RATIO,
+            SIGNATURE_BOTTOM_RATIO,
+        ),
+    )
+
+
+def _signature_stroke_candidate_in_box(
+    image: Image.Image,
+    search_box: Box,
+    portrait_box: Box | None,
+) -> tuple[Box, int] | None:
+    if search_box.width <= 0 or search_box.height <= 0:
+        return None
+
+    stroke_mask = _build_stroke_mask(image, search_box)
+    components = [
+        component
+        for component in _find_stroke_components(stroke_mask)
+        if _is_stroke_component(component, stroke_mask)
+        and _is_in_signature_band(component, stroke_mask, portrait_box)
+    ]
+    selected_components = _select_signature_stroke_cluster(components, stroke_mask, image)
+    if not selected_components:
+        return None
+
+    union_box = _union_component_boxes([component.box for component in selected_components])
+    if union_box is None:
+        return None
+
+    image_box = _stroke_box_to_image_box(union_box, stroke_mask)
+    expanded = _expand_signature_stroke_box(image_box, image)
+    total_pixels = sum(component.pixel_count for component in selected_components)
+    if not _is_signature_stroke_candidate(expanded, total_pixels, image):
+        return None
+    return (expanded, total_pixels)
+
+
+def _build_stroke_mask(image: Image.Image, search_box: Box) -> StrokeMask:
+    crop = image.crop((search_box.left, search_box.top, search_box.right, search_box.bottom))
+    crop = crop.convert("RGB")
+    crop.thumbnail((STROKE_MAX_WIDTH, STROKE_MAX_HEIGHT))
+    grayscale = ImageOps.grayscale(crop)
+    pixels = list(grayscale.tobytes())
+    threshold = _stroke_threshold(pixels)
+    mask = tuple(pixel <= threshold for pixel in pixels)
+    return StrokeMask(
+        width=grayscale.width,
+        height=grayscale.height,
+        mask=mask,
+        scale_x=search_box.width / max(1, grayscale.width),
+        scale_y=search_box.height / max(1, grayscale.height),
+        origin=search_box,
+    )
+
+
+def _stroke_threshold(pixels: list[int]) -> int:
+    if not pixels:
+        return SIGNATURE_STROKE_THRESHOLD_FLOOR
+    sorted_pixels = sorted(pixels)
+    percentile_index = min(len(sorted_pixels) - 1, max(0, len(sorted_pixels) // 4))
+    percentile_value = sorted_pixels[percentile_index]
+    threshold = percentile_value + SIGNATURE_STROKE_THRESHOLD_OFFSET
+    return max(
+        SIGNATURE_STROKE_THRESHOLD_FLOOR,
+        min(SIGNATURE_STROKE_THRESHOLD_CEILING, threshold),
+    )
+
+
+def _find_stroke_components(stroke_mask: StrokeMask) -> list[StrokeComponent]:
+    visited: set[tuple[int, int]] = set()
+    components: list[StrokeComponent] = []
+
+    for row in range(stroke_mask.height):
+        for column in range(stroke_mask.width):
+            if len(components) >= MAX_STROKE_COMPONENTS:
+                return components
+            if (column, row) in visited or not _stroke_at(stroke_mask, column, row):
+                continue
+            components.append(_collect_stroke_component(stroke_mask, column, row, visited))
+
+    return components
+
+
+def _collect_stroke_component(
+    stroke_mask: StrokeMask,
+    start_column: int,
+    start_row: int,
+    visited: set[tuple[int, int]],
+) -> StrokeComponent:
+    queue: deque[tuple[int, int]] = deque([(start_column, start_row)])
+    visited.add((start_column, start_row))
+    pixels: list[tuple[int, int]] = []
+
+    while queue and len(pixels) < MAX_STROKE_COMPONENT_PIXELS:
+        column, row = queue.popleft()
+        pixels.append((column, row))
+        for neighbor_column, neighbor_row in _neighbors(column, row):
+            if (neighbor_column, neighbor_row) in visited:
+                continue
+            if not _stroke_at(stroke_mask, neighbor_column, neighbor_row):
+                continue
+            visited.add((neighbor_column, neighbor_row))
+            queue.append((neighbor_column, neighbor_row))
+
+    return StrokeComponent(box=_box_from_points(pixels), pixel_count=len(pixels))
+
+
+def _stroke_at(stroke_mask: StrokeMask, column: int, row: int) -> bool:
+    if not (0 <= column < stroke_mask.width and 0 <= row < stroke_mask.height):
+        return False
+    index = row * stroke_mask.width + column
+    return stroke_mask.mask[index]
+
+
+def _box_from_points(points: list[tuple[int, int]]) -> Box:
+    columns = [column for column, _ in points]
+    rows = [row for _, row in points]
+    return Box(
+        left=min(columns),
+        top=min(rows),
+        right=max(columns) + 1,
+        bottom=max(rows) + 1,
+    )
+
+
+def _is_stroke_component(component: StrokeComponent, stroke_mask: StrokeMask) -> bool:
+    if component.pixel_count < SIGNATURE_STROKE_MIN_PIXELS:
+        return False
+    min_width = max(
+        2,
+        int(stroke_mask.width * SIGNATURE_STROKE_MIN_COMPONENT_WIDTH_RATIO),
+    )
+    if component.box.width < min_width:
+        return False
+    if component.box.height > stroke_mask.height * SIGNATURE_STROKE_MAX_COMPONENT_HEIGHT_RATIO:
+        return False
+    fill_ratio = component.pixel_count / max(1, component.box.area)
+    return fill_ratio <= SIGNATURE_STROKE_MAX_FILL_RATIO
+
+
+def _is_in_signature_band(
+    component: StrokeComponent,
+    stroke_mask: StrokeMask,
+    portrait_box: Box | None,
+) -> bool:
+    if portrait_box is None:
+        return True
+
+    portrait_bottom_in_mask = int(
+        (portrait_box.bottom - stroke_mask.origin.top) / stroke_mask.scale_y,
+    )
+    band_start = max(0, portrait_bottom_in_mask - int(stroke_mask.height * 0.12))
+    component_center_y = component.box.top + (component.box.height / 2)
+    return component_center_y >= band_start
+
+
+def _select_signature_stroke_cluster(
+    components: list[StrokeComponent],
+    stroke_mask: StrokeMask,
+    image: Image.Image,
+) -> list[StrokeComponent]:
+    best_cluster: list[StrokeComponent] = []
+    best_rank: tuple[float, int] = (-1.0, 0)
+
+    for seed in components:
+        cluster = [
+            component
+            for component in components
+            if _same_signature_cluster(seed, component, stroke_mask)
+        ]
+        union_box = _union_component_boxes([component.box for component in cluster])
+        if union_box is None:
+            continue
+
+        image_box = _expand_signature_stroke_box(
+            _stroke_box_to_image_box(union_box, stroke_mask),
+            image,
+        )
+        total_pixels = sum(component.pixel_count for component in cluster)
+        if not _is_signature_stroke_candidate(image_box, total_pixels, image):
+            continue
+
+        rank = _signature_stroke_rank(image_box, image)
+        if rank > best_rank:
+            best_cluster = cluster
+            best_rank = rank
+
+    return best_cluster
+
+
+def _same_signature_cluster(
+    seed: StrokeComponent,
+    component: StrokeComponent,
+    stroke_mask: StrokeMask,
+) -> bool:
+    seed_center_y = seed.box.top + (seed.box.height / 2)
+    component_center_y = component.box.top + (component.box.height / 2)
+    max_vertical_distance = max(
+        seed.box.height,
+        int(stroke_mask.height * SIGNATURE_STROKE_CLUSTER_VERTICAL_RATIO),
+    )
+    return abs(seed_center_y - component_center_y) <= max_vertical_distance
+
+
+def _union_component_boxes(boxes: list[Box]) -> Box | None:
+    if not boxes:
+        return None
+    return Box(
+        left=min(box.left for box in boxes),
+        top=min(box.top for box in boxes),
+        right=max(box.right for box in boxes),
+        bottom=max(box.bottom for box in boxes),
+    )
+
+
+def _stroke_box_to_image_box(box: Box, stroke_mask: StrokeMask) -> Box:
+    left = stroke_mask.origin.left + int(box.left * stroke_mask.scale_x)
+    top = stroke_mask.origin.top + int(box.top * stroke_mask.scale_y)
+    right = stroke_mask.origin.left + int(box.right * stroke_mask.scale_x)
+    bottom = stroke_mask.origin.top + int(box.bottom * stroke_mask.scale_y)
+    return Box(left=left, top=top, right=right, bottom=bottom)
+
+
+def _expand_signature_stroke_box(box: Box, image: Image.Image) -> Box:
+    padding_x = int(image.width * SIGNATURE_STROKE_EXPAND_X_RATIO)
+    padding_y = int(image.height * SIGNATURE_STROKE_EXPAND_Y_RATIO)
+    return _clamp_box(
+        Box(
+            left=box.left - padding_x,
+            top=box.top - padding_y,
+            right=box.right + padding_x,
+            bottom=box.bottom + padding_y,
+        ),
+        image,
+    )
+
+
+def _is_signature_stroke_candidate(box: Box, pixel_count: int, image: Image.Image) -> bool:
+    if pixel_count < SIGNATURE_STROKE_MIN_UNION_PIXELS:
+        return False
+    if box.width < image.width * SIGNATURE_STROKE_MIN_WIDTH_RATIO:
+        return False
+    if box.height > image.height * SIGNATURE_STROKE_MAX_HEIGHT_RATIO:
+        return False
+    return box.width / max(1, box.height) >= SIGNATURE_STROKE_MIN_ASPECT_RATIO
+
+
+def _signature_stroke_rank(box: Box, image: Image.Image) -> tuple[float, int]:
+    area_score = box.area / max(1, image.width * image.height)
+    compact_height_score = 1.0 - min(box.height / max(1, image.height * 0.25), 1.0)
+    return (area_score + compact_height_score, box.width)
+
+
 def _is_signature_candidate(box: Box, image: Image.Image) -> bool:
     if box.width < image.width * MIN_SIGNATURE_COMPONENT_WIDTH_RATIO:
         return False
@@ -564,11 +907,23 @@ def _fractional_box(
 def _expand_box(box: Box, image: Image.Image, padding_ratio: float) -> Box:
     padding_x = int(image.width * padding_ratio)
     padding_y = int(image.height * padding_ratio)
+    return _clamp_box(
+        Box(
+            left=box.left - padding_x,
+            top=box.top - padding_y,
+            right=box.right + padding_x,
+            bottom=box.bottom + padding_y,
+        ),
+        image,
+    )
+
+
+def _clamp_box(box: Box, image: Image.Image) -> Box:
     return Box(
-        left=max(0, box.left - padding_x),
-        top=max(0, box.top - padding_y),
-        right=min(image.width, box.right + padding_x),
-        bottom=min(image.height, box.bottom + padding_y),
+        left=max(0, min(image.width - 1, box.left)),
+        top=max(0, min(image.height - 1, box.top)),
+        right=max(1, min(image.width, box.right)),
+        bottom=max(1, min(image.height, box.bottom)),
     )
 
 
