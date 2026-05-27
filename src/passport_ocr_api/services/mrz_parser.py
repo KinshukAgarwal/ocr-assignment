@@ -14,6 +14,9 @@ VISUAL_DATE_YEAR_LENGTH = 4
 VISUAL_DATE_DAY_LENGTH = 2
 COUNTRY_CODE_LENGTH = 3
 TD3_PREFIX_LENGTH = 2
+MRZ_NAME_SECTION_LENGTH = 39
+MRZ_PASSPORT_NUMBER_LENGTH = 9
+MRZ_OPTIONAL_DATA_LENGTH = 14
 MIN_PASSPORT_NUMBER_LENGTH = 6
 MAX_PASSPORT_NUMBER_LENGTH = 12
 DATE_CONTEXT_LINE_LIMIT = 3
@@ -73,6 +76,7 @@ class MrzPassportParser:
         line_1, line_2 = lines[0], lines[1]
         mrz_extraction = _parse_td3_lines(line_1, line_2)
         extraction = _merge_extractions(mrz_extraction, visible_extraction)
+        extraction = _repair_mrz_lines_from_fields(extraction)
         confidence = _confidence_for_extraction(extraction, confidence_hint)
         field_confidence = _field_confidence(extraction, confidence)
         confidence = _overall_confidence(field_confidence)
@@ -321,8 +325,6 @@ def _parse_visible_text(text: str) -> PassportExtraction:
         place_of_birth=_find_labeled_location(lines, "BIRTH") or _find_first_location(lines),
         date_of_issue=date_of_issue,
         date_of_expiry=date_of_expiry,
-        place_of_issue=_find_labeled_location(lines, "ISSUE"),
-        authority=_find_labeled_value(lines, "AUTHORITY"),
     )
 
 
@@ -520,35 +522,18 @@ def _extract_comma_location(line: str) -> str | None:
     return None
 
 
-def _find_labeled_value(lines: list[str], label: str) -> str | None:
-    for index, line in enumerate(lines):
-        if label not in line:
-            continue
-        same_line_value = _value_after_label(line, label, keep_passport_word=True)
-        if same_line_value is not None:
-            return same_line_value
-        if index + FIRST_FOLLOWING_LINE < len(lines):
-            return _clean_free_text(lines[index + FIRST_FOLLOWING_LINE], keep_passport_word=True)
-    return None
-
-
 def _value_after_label(
     line: str,
     label: str,
-    *,
-    keep_passport_word: bool = False,
 ) -> str | None:
     position = line.find(label)
     if position < 0:
         return None
-    return _clean_free_text(line[position + len(label) :], keep_passport_word=keep_passport_word)
+    return _clean_free_text(line[position + len(label) :])
 
 
-def _clean_free_text(value: str, *, keep_passport_word: bool = False) -> str | None:
-    noise_words = DOCUMENT_NOISE_WORDS
-    if keep_passport_word:
-        noise_words = DOCUMENT_NOISE_WORDS - {"PASSPORT"}
-    words = [word for word in _line_tokens(value) if word not in noise_words]
+def _clean_free_text(value: str) -> str | None:
+    words = [word for word in _line_tokens(value) if word not in DOCUMENT_NOISE_WORDS]
     if not words:
         return None
     return " ".join(words)
@@ -642,6 +627,136 @@ def _merge_extractions(
     if merged.issuing_country is None:
         merged.issuing_country = merged.country_code
     return merged
+
+
+def _repair_mrz_lines_from_fields(extraction: PassportExtraction) -> PassportExtraction:
+    repaired = extraction.model_copy()
+    if repaired.mrz_line_1 is not None:
+        repaired.mrz_line_1 = _repair_returned_mrz_line_1(repaired)
+    if repaired.mrz_line_2 is not None:
+        repaired.mrz_line_2 = _repair_returned_mrz_line_2(repaired)
+    return repaired
+
+
+def _repair_returned_mrz_line_1(extraction: PassportExtraction) -> str:
+    line = _pad_mrz(extraction.mrz_line_1 or "")
+    document_type = _parse_document_type(extraction.type or line[0:1]) or "P"
+    country_code = _mrz_country_code(extraction.country_code) or _mrz_country_code(
+        extraction.issuing_country,
+    )
+    if country_code is None:
+        country_code = _normalize_country_code(line[2:5]) or line[2:5]
+
+    name_section = _format_mrz_name_section(extraction.surname, extraction.given_names)
+    if name_section is None:
+        name_section = line[5:TD3_LINE_LENGTH]
+    return _pad_mrz(f"{document_type}<{country_code}{name_section}")
+
+
+def _repair_returned_mrz_line_2(extraction: PassportExtraction) -> str:
+    line = _pad_mrz(extraction.mrz_line_2 or "")
+    passport_number = _format_mrz_value(
+        extraction.passport_number,
+        MRZ_PASSPORT_NUMBER_LENGTH,
+    )
+    if passport_number is None:
+        passport_number = _format_mrz_value(line[0:9], MRZ_PASSPORT_NUMBER_LENGTH) or line[0:9]
+    passport_check = calculate_mrz_check_digit(passport_number)
+
+    nationality = _mrz_country_code(extraction.nationality)
+    if nationality is None:
+        nationality = _mrz_country_code(extraction.country_code)
+    if nationality is None:
+        nationality = _normalize_country_code(line[10:13]) or line[10:13]
+
+    birth_date = _format_mrz_date(extraction.date_of_birth) or _normalize_numeric_ocr(line[13:19])
+    birth_date = _pad_mrz(birth_date)[:MRZ_DATE_LENGTH]
+    birth_check = calculate_mrz_check_digit(birth_date)
+
+    sex = _format_mrz_sex(extraction.sex) or line[20:21]
+
+    expiry_date = _format_mrz_date(extraction.date_of_expiry) or _normalize_numeric_ocr(line[21:27])
+    expiry_date = _pad_mrz(expiry_date)[:MRZ_DATE_LENGTH]
+    expiry_check = calculate_mrz_check_digit(expiry_date)
+
+    optional_data = _format_mrz_value(line[28:42], MRZ_OPTIONAL_DATA_LENGTH)
+    if optional_data is None:
+        optional_data = "<" * MRZ_OPTIONAL_DATA_LENGTH
+    optional_check = calculate_mrz_check_digit(optional_data)
+
+    composite_value = (
+        passport_number
+        + passport_check
+        + birth_date
+        + birth_check
+        + expiry_date
+        + expiry_check
+        + optional_data
+        + optional_check
+    )
+    composite_check = calculate_mrz_check_digit(composite_value)
+    return (
+        passport_number
+        + passport_check
+        + nationality
+        + birth_date
+        + birth_check
+        + sex
+        + expiry_date
+        + expiry_check
+        + optional_data
+        + optional_check
+        + composite_check
+    )
+
+
+def _mrz_country_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _normalize_country_code(value)
+
+
+def _format_mrz_name_section(surname: str | None, given_names: str | None) -> str | None:
+    surname_value = _format_mrz_name_value(surname)
+    given_value = _format_mrz_name_value(given_names)
+    if surname_value is None and given_value is None:
+        return None
+    name_section = f"{surname_value or ''}<<{given_value or ''}"
+    return _pad_mrz(name_section)[:MRZ_NAME_SECTION_LENGTH]
+
+
+def _format_mrz_name_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    words = re.findall(r"[A-Z]+", value.upper())
+    if not words:
+        return None
+    return "<".join(words)
+
+
+def _format_mrz_value(value: str | None, length: int) -> str | None:
+    if value is None:
+        return None
+    normalized = normalize_mrz_line(value)
+    if not normalized:
+        return None
+    return normalized[:length].ljust(length, "<")
+
+
+def _format_mrz_date(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return None
+    return f"{parsed.year % 100:02d}{parsed.month:02d}{parsed.day:02d}"
+
+
+def _format_mrz_sex(value: Sex | None) -> str | None:
+    if value is None:
+        return None
+    return value.value
 
 
 def _confidence_for_extraction(extraction: PassportExtraction, confidence_hint: float) -> float:

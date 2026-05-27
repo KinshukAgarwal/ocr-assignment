@@ -62,8 +62,6 @@ def test_parser_merges_visible_common_passport_fields() -> None:
             "01/01/2020",
             "Date of Expiry",
             "15/04/2012",
-            "Authority",
-            "PASSPORT OFFICE SAMPLE",
             SAMPLE_MRZ,
         ],
     )
@@ -81,7 +79,30 @@ def test_parser_merges_visible_common_passport_fields() -> None:
     assert parsed.extraction.place_of_birth == "SAMPLE CITY"
     assert parsed.extraction.date_of_issue == "2020-01-01"
     assert parsed.extraction.date_of_expiry == "2012-04-15"
-    assert parsed.extraction.authority == "PASSPORT OFFICE SAMPLE"
+
+
+def test_parser_repairs_returned_mrz_lines_from_visible_fields() -> None:
+    text = "\n".join(
+        [
+            "Type P Code UTO Nationality UTOPIAN",
+            "Passport No L898902C3",
+            "Surname",
+            "ERIKSSON",
+            "Given Name(s)",
+            "ANNA MARIA",
+            "Date of Birth / Sex",
+            "12/08/1974 F",
+            "Date of Expiry",
+            "15/04/2012",
+            "P<UTOERIKSS0N<<ANNA<MAR1A<<<<<<<<<<<<<<<<<<<",
+            "L898902C30UTO7408120F1204150ZE184226B<<<<<00",
+        ],
+    )
+
+    parsed = MrzPassportParser().parse(text, confidence_hint=HIGH_CONFIDENCE)
+
+    assert parsed.extraction.mrz_line_1 == "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<"
+    assert parsed.extraction.mrz_line_2 == "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
 
 
 def test_parser_handles_missing_mrz() -> None:
