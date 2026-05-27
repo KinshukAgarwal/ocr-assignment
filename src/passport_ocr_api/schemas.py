@@ -19,6 +19,8 @@ class OrientationInfo(BaseModel):
 
 
 class PassportExtraction(BaseModel):
+    type: str | None = None
+    country_code: str | None = None
     passport_number: str | None = None
     issuing_country: str | None = None
     surname: str | None = None
@@ -26,7 +28,12 @@ class PassportExtraction(BaseModel):
     nationality: str | None = None
     date_of_birth: str | None = None
     sex: Sex | None = None
+    place_of_birth: str | None = None
+    date_of_issue: str | None = None
     date_of_expiry: str | None = None
+    place_of_issue: str | None = None
+    authority: str | None = None
+    holder_signature: str | None = None
     mrz_line_1: str | None = None
     mrz_line_2: str | None = None
 
