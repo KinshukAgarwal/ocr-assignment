@@ -7,3 +7,10 @@ __pycache__/
 .env
 .uvicorn.log
 .uvicorn.pid
+
+# Local passport samples may contain personal data.
+docs/*.jpeg
+docs/*.jpg
+docs/*.png
+docs/*.webp
+docs/*.pdf
