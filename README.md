@@ -82,6 +82,13 @@ The `extraction` object uses one global passport schema, not country-specific sc
 - `mrz_line_1`
 - `mrz_line_2`
 
+The `images` object returns extracted media crops:
+
+- `portrait`
+- `signature`
+
+Each extracted image includes `present`, `content_type`, `data_base64`, `bounding_box`, `confidence`, and `method`. Crops are encoded as JPEG base64 strings and are not persisted by the API.
+
 ## Safety defaults
 
 - Max upload size: 10 MB

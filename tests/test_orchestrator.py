@@ -4,7 +4,12 @@ from PIL import Image
 
 from passport_ocr_api.config import Settings
 from passport_ocr_api.errors import OcrUnavailableError
-from passport_ocr_api.schemas import PassportExtraction, ValidationInfo
+from passport_ocr_api.schemas import (
+    ExtractedImage,
+    PassportExtraction,
+    PassportImageExtraction,
+    ValidationInfo,
+)
 from passport_ocr_api.services.orchestrator import PassportOcrPipeline
 from passport_ocr_api.services.types import OcrLine, OcrResult, OrientationResult, ParsedPassport
 from passport_ocr_api.services.upload_validator import UploadedDocument
@@ -51,6 +56,26 @@ class FakeValidator:
         return ValidationInfo(status="not_evaluated", issues=[])
 
 
+class FakeImageExtractor:
+    def extract(self, image: Image.Image) -> PassportImageExtraction:
+        return PassportImageExtraction(
+            portrait=ExtractedImage(
+                present=False,
+                data_base64=None,
+                bounding_box=None,
+                confidence=0.0,
+                method="test",
+            ),
+            signature=ExtractedImage(
+                present=False,
+                data_base64=None,
+                bounding_box=None,
+                confidence=0.0,
+                method="test",
+            ),
+        )
+
+
 class FakeCloud:
     def __init__(self) -> None:
         self.called = False
@@ -73,6 +98,7 @@ def test_pipeline_skips_google_when_confidence_is_high() -> None:
         orientation_corrector=FakeOrientation(_ocr_result(0.9)),  # type: ignore[arg-type]
         parser=FakeParser(confidence=0.9),
         validator=FakeValidator(),
+        image_extractor=FakeImageExtractor(),
         cloud_ocr=cloud,
     )
 
@@ -90,6 +116,7 @@ def test_pipeline_uses_google_when_confidence_is_low() -> None:
         orientation_corrector=FakeOrientation(_ocr_result(0.2)),  # type: ignore[arg-type]
         parser=FakeParser(confidence=0.2),
         validator=FakeValidator(),
+        image_extractor=FakeImageExtractor(),
         cloud_ocr=cloud,
     )
 
@@ -108,6 +135,7 @@ def test_pipeline_uses_google_when_local_ocr_is_unavailable() -> None:
         orientation_corrector=UnavailableOrientation(),  # type: ignore[arg-type]
         parser=FakeParser(confidence=0.8),
         validator=FakeValidator(),
+        image_extractor=FakeImageExtractor(),
         cloud_ocr=cloud,
     )
 
