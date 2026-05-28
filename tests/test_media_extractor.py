@@ -3,7 +3,11 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw
 
-from passport_ocr_api.services.media_extractor import PassportMediaExtractor
+from passport_ocr_api.services.media_extractor import (
+    Box,
+    PassportMediaExtractor,
+    _overshoot_and_trim_media_box,
+)
 
 IMAGE_WIDTH = 1000
 IMAGE_HEIGHT = 700
@@ -21,6 +25,14 @@ LOW_SIGNATURE_RIGHT = 440
 LOW_SIGNATURE_BOTTOM = 510
 NEARBY_TEXT_LEFT = 560
 STROKE_CONFIDENCE = 0.75
+OVERSHOOT_SIGNATURE_INK_LEFT = 145
+OVERSHOOT_SIGNATURE_INK_RIGHT = 320
+OVERSHOOT_SIGNATURE_MIN_TRIMMED_LEFT = 100
+OVERSHOOT_SIGNATURE_MAX_WIDTH = 260
+PARTIAL_PHOTO_LEFT = 70
+PARTIAL_PHOTO_TOP = 110
+PARTIAL_PHOTO_RIGHT = 250
+PARTIAL_PHOTO_BOTTOM = 390
 
 
 def test_media_extractor_returns_portrait_and_signature_crops() -> None:
@@ -60,6 +72,55 @@ def test_media_extractor_prefers_stroke_density_signature_below_portrait() -> No
     assert signature_right > LOW_SIGNATURE_LEFT
     assert signature_box.top < LOW_SIGNATURE_BOTTOM
     assert signature_right < NEARBY_TEXT_LEFT
+    assert signature_box.left <= LOW_SIGNATURE_LEFT
+
+
+def test_signature_crop_overshoots_then_trims_without_cutting_left_stroke() -> None:
+    image = Image.new("RGB", (500, 240), "white")
+    draw = ImageDraw.Draw(image)
+    draw.line(
+        [
+            (OVERSHOOT_SIGNATURE_INK_LEFT, 125),
+            (205, 95),
+            (270, 145),
+            (OVERSHOOT_SIGNATURE_INK_RIGHT, 110),
+        ],
+        fill=(20, 30, 130),
+        width=5,
+    )
+
+    trimmed = _overshoot_and_trim_media_box(
+        image,
+        Box(left=160, top=95, right=310, bottom=145),
+        "signature",
+    )
+
+    assert trimmed.left <= OVERSHOOT_SIGNATURE_INK_LEFT
+    assert trimmed.right >= OVERSHOOT_SIGNATURE_INK_RIGHT
+    assert trimmed.left > OVERSHOOT_SIGNATURE_MIN_TRIMMED_LEFT
+    assert trimmed.width < OVERSHOOT_SIGNATURE_MAX_WIDTH
+
+
+def test_portrait_crop_keeps_photo_when_face_detection_is_partial() -> None:
+    image = Image.new("RGB", (700, 500), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle(
+        (PARTIAL_PHOTO_LEFT, PARTIAL_PHOTO_TOP, PARTIAL_PHOTO_RIGHT, PARTIAL_PHOTO_BOTTOM),
+        fill=(190, 210, 235),
+        outline="black",
+    )
+    draw.ellipse((150, 165, 235, 275), fill=(215, 170, 135))
+    draw.rectangle((160, 275, 225, 370), fill=(35, 80, 145))
+    draw.text((330, 120), "PASSPORT", fill="black")
+
+    result = PassportMediaExtractor().extract(image)
+
+    assert result.portrait.bounding_box is not None
+    portrait = result.portrait.bounding_box
+    assert portrait.left <= PARTIAL_PHOTO_LEFT
+    assert portrait.top <= PARTIAL_PHOTO_TOP
+    assert portrait.left + portrait.width >= PARTIAL_PHOTO_RIGHT
+    assert portrait.top + portrait.height >= PARTIAL_PHOTO_BOTTOM
 
 
 def _passport_like_image() -> Image.Image:

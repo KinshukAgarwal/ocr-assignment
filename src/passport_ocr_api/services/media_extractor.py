@@ -36,8 +36,8 @@ FALLBACK_CONFIDENCE = 0.2
 EXCLUDED_REGION_OVERLAP_RATIO = 0.65
 JPEG_QUALITY = 85
 MAX_CROP_EDGE_PIXELS = 512
-PORTRAIT_EXPAND_PADDING_RATIO = 0.005
-SIGNATURE_EXPAND_PADDING_RATIO = 0.03
+PORTRAIT_OVERSHOOT_X_RATIO = 0.035
+PORTRAIT_OVERSHOOT_Y_RATIO = 0.030
 SIDE_BAND_TOP_RATIO = 0.10
 SIDE_BAND_BOTTOM_RATIO = 0.86
 LEFT_BAND_RIGHT_RATIO = 0.45
@@ -72,6 +72,7 @@ ESTIMATED_PORTRAIT_HEIGHT_RATIO = 0.42
 FACE_HORIZONTAL_EXPANSION_RATIO = 0.95
 FACE_TOP_EXPANSION_RATIO = 0.85
 FACE_BOTTOM_EXPANSION_RATIO = 1.8
+FACE_BOTTOM_COMPONENT_OVERFLOW_RATIO = 0.10
 SIGNATURE_PORTRAIT_LEFT_PADDING_RATIO = 0.04
 SIGNATURE_PORTRAIT_RIGHT_PADDING_RATIO = 0.12
 SIGNATURE_PORTRAIT_TOP_RATIO = 0.55
@@ -80,10 +81,10 @@ SIGNATURE_PORTRAIT_BOTTOM_PADDING_RATIO = 0.16
 SIGNATURE_DISTANCE_WEIGHT = 1.2
 SIGNATURE_STROKE_TOP_OVERLAP_RATIO = 0.18
 SIGNATURE_STROKE_BOTTOM_PADDING_RATIO = 0.26
-SIGNATURE_STROKE_LEFT_PADDING_RATIO = 0.10
-SIGNATURE_STROKE_RIGHT_PADDING_RATIO = 0.15
+SIGNATURE_STROKE_LEFT_PADDING_RATIO = 0.28
+SIGNATURE_STROKE_RIGHT_PADDING_RATIO = 0.20
 SIGNATURE_STROKE_MIN_WIDTH_RATIO = 0.09
-SIGNATURE_STROKE_MAX_HEIGHT_RATIO = 0.18
+SIGNATURE_STROKE_MAX_HEIGHT_RATIO = 0.22
 SIGNATURE_STROKE_MIN_ASPECT_RATIO = 1.20
 SIGNATURE_STROKE_MIN_PIXELS = 6
 SIGNATURE_STROKE_MIN_UNION_PIXELS = 16
@@ -94,10 +95,25 @@ SIGNATURE_STROKE_CLUSTER_VERTICAL_RATIO = 0.20
 SIGNATURE_STROKE_THRESHOLD_FLOOR = 45
 SIGNATURE_STROKE_THRESHOLD_CEILING = 150
 SIGNATURE_STROKE_THRESHOLD_OFFSET = 18
-SIGNATURE_STROKE_EXPAND_X_RATIO = 0.018
+SIGNATURE_STROKE_EXPAND_LEFT_RATIO = 0.055
+SIGNATURE_STROKE_EXPAND_RIGHT_RATIO = 0.030
 SIGNATURE_STROKE_EXPAND_Y_RATIO = 0.025
+TRIM_SCAN_MAX_EDGE_PIXELS = 240
+TRIM_MIN_EDGE_PIXELS = 3
+PORTRAIT_TRIM_MAX_EDGE_RATIO = 0.18
+SIGNATURE_TRIM_MAX_EDGE_RATIO = 0.32
+PORTRAIT_TRIM_KEEP_RATIO = 0.025
+SIGNATURE_TRIM_KEEP_RATIO = 0.045
+PORTRAIT_TRIM_MIN_ACTIVE_RATIO = 0.060
+SIGNATURE_TRIM_MIN_ACTIVE_RATIO = 0.006
+PORTRAIT_BLANK_BRIGHTNESS = 238
+PORTRAIT_BLANK_SPREAD = 18
+SIGNATURE_BLUE_INK_DELTA = 22
+SIGNATURE_COLORED_INK_SPREAD = 42
+SIGNATURE_INK_BRIGHTNESS_MAX = 225
 
 CellKind = Literal["photo", "dark"]
+MediaKind = Literal["portrait", "signature"]
 
 
 @dataclass(frozen=True)
@@ -206,9 +222,10 @@ class PassportMediaExtractor:
             _blue_dominance_score(best.box, image) >= GHOST_PORTRAIT_BLUE_THRESHOLD
             and _skin_score(best.box, image) == 0.0
         ):
-            return _estimated_main_portrait_box(image, best.box)
+            estimated = _estimated_main_portrait_box(image, best.box)
+            return _overshoot_and_trim_media_box(image, estimated, "portrait")
         refined = _refine_portrait_box(best.box, image)
-        return _expand_box(refined, image, PORTRAIT_EXPAND_PADDING_RATIO)
+        return _overshoot_and_trim_media_box(image, refined, "portrait")
 
     def _find_signature(self, image: Image.Image, portrait_box: Box | None) -> MediaCandidate:
         stroke_candidate = _find_signature_stroke_candidate(image, portrait_box)
@@ -235,7 +252,7 @@ class PassportMediaExtractor:
             key=lambda component: _signature_rank(component, image, portrait_box),
         )
         return MediaCandidate(
-            box=_expand_box(best.box, image, SIGNATURE_EXPAND_PADDING_RATIO),
+            box=_overshoot_and_trim_media_box(image, best.box, "signature"),
             confidence=SIGNATURE_COMPONENT_CONFIDENCE,
             method="stroke_component_scan",
         )
@@ -391,11 +408,20 @@ def _refine_portrait_box(component_box: Box, image: Image.Image) -> Box:
     horizontal_padding = int(skin_box.width * FACE_HORIZONTAL_EXPANSION_RATIO)
     top_padding = int(skin_box.height * FACE_TOP_EXPANSION_RATIO)
     bottom_padding = int(skin_box.height * FACE_BOTTOM_EXPANSION_RATIO)
-    return Box(
+    face_box = Box(
         left=max(0, skin_box.left - horizontal_padding),
         top=max(0, skin_box.top - top_padding),
         right=min(image.width, skin_box.right + horizontal_padding),
         bottom=min(image.height, skin_box.bottom + bottom_padding),
+    )
+    max_bottom = component_box.bottom + int(
+        component_box.height * FACE_BOTTOM_COMPONENT_OVERFLOW_RATIO,
+    )
+    return Box(
+        left=min(component_box.left, face_box.left),
+        top=min(component_box.top, face_box.top),
+        right=max(component_box.right, face_box.right),
+        bottom=max(component_box.bottom, min(face_box.bottom, max_bottom)),
     )
 
 
@@ -758,17 +784,15 @@ def _stroke_box_to_image_box(box: Box, stroke_mask: StrokeMask) -> Box:
 
 
 def _expand_signature_stroke_box(box: Box, image: Image.Image) -> Box:
-    padding_x = int(image.width * SIGNATURE_STROKE_EXPAND_X_RATIO)
-    padding_y = int(image.height * SIGNATURE_STROKE_EXPAND_Y_RATIO)
-    return _clamp_box(
-        Box(
-            left=box.left - padding_x,
-            top=box.top - padding_y,
-            right=box.right + padding_x,
-            bottom=box.bottom + padding_y,
-        ),
+    expanded = _expand_box_asymmetric(
+        box,
         image,
+        left_ratio=SIGNATURE_STROKE_EXPAND_LEFT_RATIO,
+        top_ratio=SIGNATURE_STROKE_EXPAND_Y_RATIO,
+        right_ratio=SIGNATURE_STROKE_EXPAND_RIGHT_RATIO,
+        bottom_ratio=SIGNATURE_STROKE_EXPAND_Y_RATIO,
     )
+    return _trim_low_activity_edges(image, expanded, "signature")
 
 
 def _is_signature_stroke_candidate(box: Box, pixel_count: int, image: Image.Image) -> bool:
@@ -862,7 +886,11 @@ def _overlaps_excluded_region(box: Box, excluded: Box | None) -> bool:
 
 def _fallback_signature_box(image: Image.Image, portrait_box: Box | None) -> Box | None:
     if portrait_box is not None:
-        return _portrait_relative_signature_box(image, portrait_box)
+        return _overshoot_and_trim_media_box(
+            image,
+            _portrait_relative_signature_box(image, portrait_box),
+            "signature",
+        )
 
     box = _fractional_box(
         image,
@@ -873,7 +901,7 @@ def _fallback_signature_box(image: Image.Image, portrait_box: Box | None) -> Box
     )
     if _overlaps_excluded_region(box, portrait_box):
         return None
-    return box
+    return _overshoot_and_trim_media_box(image, box, "signature")
 
 
 def _portrait_relative_signature_box(image: Image.Image, portrait_box: Box) -> Box:
@@ -904,18 +932,188 @@ def _fractional_box(
     )
 
 
-def _expand_box(box: Box, image: Image.Image, padding_ratio: float) -> Box:
-    padding_x = int(image.width * padding_ratio)
-    padding_y = int(image.height * padding_ratio)
+def _overshoot_and_trim_media_box(image: Image.Image, box: Box, kind: MediaKind) -> Box:
+    if kind == "portrait":
+        expanded = _expand_box_asymmetric(
+            box,
+            image,
+            left_ratio=PORTRAIT_OVERSHOOT_X_RATIO,
+            top_ratio=PORTRAIT_OVERSHOOT_Y_RATIO,
+            right_ratio=PORTRAIT_OVERSHOOT_X_RATIO,
+            bottom_ratio=PORTRAIT_OVERSHOOT_Y_RATIO,
+        )
+        return _trim_low_activity_edges(image, expanded, kind)
+
+    expanded = _expand_box_asymmetric(
+        box,
+        image,
+        left_ratio=SIGNATURE_STROKE_EXPAND_LEFT_RATIO,
+        top_ratio=SIGNATURE_STROKE_EXPAND_Y_RATIO,
+        right_ratio=SIGNATURE_STROKE_EXPAND_RIGHT_RATIO,
+        bottom_ratio=SIGNATURE_STROKE_EXPAND_Y_RATIO,
+    )
+    return _trim_low_activity_edges(image, expanded, kind)
+
+
+def _expand_box_asymmetric(
+    box: Box,
+    image: Image.Image,
+    *,
+    left_ratio: float,
+    top_ratio: float,
+    right_ratio: float,
+    bottom_ratio: float,
+) -> Box:
     return _clamp_box(
         Box(
-            left=box.left - padding_x,
-            top=box.top - padding_y,
-            right=box.right + padding_x,
-            bottom=box.bottom + padding_y,
+            left=box.left - int(image.width * left_ratio),
+            top=box.top - int(image.height * top_ratio),
+            right=box.right + int(image.width * right_ratio),
+            bottom=box.bottom + int(image.height * bottom_ratio),
         ),
         image,
     )
+
+
+def _trim_low_activity_edges(image: Image.Image, box: Box, kind: MediaKind) -> Box:
+    clamped = _clamp_box(box, image)
+    if clamped.width <= TRIM_MIN_EDGE_PIXELS or clamped.height <= TRIM_MIN_EDGE_PIXELS:
+        return clamped
+
+    scan = image.crop((clamped.left, clamped.top, clamped.right, clamped.bottom)).convert("RGB")
+    scan.thumbnail((TRIM_SCAN_MAX_EDGE_PIXELS, TRIM_SCAN_MAX_EDGE_PIXELS))
+    if scan.width <= TRIM_MIN_EDGE_PIXELS or scan.height <= TRIM_MIN_EDGE_PIXELS:
+        return clamped
+
+    activity = _activity_mask(scan, kind)
+    left = _edge_trim_pixels(activity, scan.width, scan.height, "left", kind)
+    right = _edge_trim_pixels(activity, scan.width, scan.height, "right", kind)
+    top = _edge_trim_pixels(activity, scan.width, scan.height, "top", kind)
+    bottom = _edge_trim_pixels(activity, scan.width, scan.height, "bottom", kind)
+    return _map_scan_trim_to_box(clamped, scan.size, left, right, top, bottom, kind)
+
+
+def _activity_mask(scan: Image.Image, kind: MediaKind) -> tuple[bool, ...]:
+    raw_pixels = scan.tobytes()
+    pixels = [
+        (raw_pixels[index], raw_pixels[index + 1], raw_pixels[index + 2])
+        for index in range(0, len(raw_pixels), MIN_RGB_TUPLE_LENGTH)
+    ]
+    if kind == "signature":
+        grayscale = [int(sum(pixel) / MIN_RGB_TUPLE_LENGTH) for pixel in pixels]
+        threshold = _stroke_threshold(grayscale)
+        return tuple(_looks_like_signature_ink(pixel, threshold) for pixel in pixels)
+
+    return tuple(_looks_like_portrait_content(pixel) for pixel in pixels)
+
+
+def _looks_like_signature_ink(pixel: tuple[int, int, int], threshold: int) -> bool:
+    red, green, blue = pixel
+    brightness = int(sum(pixel) / MIN_RGB_TUPLE_LENGTH)
+    spread = max(pixel) - min(pixel)
+    blue_delta = blue - max(red, green)
+    return (
+        brightness <= threshold
+        or (blue_delta >= SIGNATURE_BLUE_INK_DELTA and brightness <= SIGNATURE_INK_BRIGHTNESS_MAX)
+        or (
+            spread >= SIGNATURE_COLORED_INK_SPREAD
+            and brightness <= SIGNATURE_INK_BRIGHTNESS_MAX
+        )
+    )
+
+
+def _looks_like_portrait_content(pixel: tuple[int, int, int]) -> bool:
+    brightness = int(sum(pixel) / MIN_RGB_TUPLE_LENGTH)
+    spread = max(pixel) - min(pixel)
+    return brightness <= PORTRAIT_BLANK_BRIGHTNESS or spread >= PORTRAIT_BLANK_SPREAD
+
+
+def _edge_trim_pixels(
+    activity: tuple[bool, ...],
+    width: int,
+    height: int,
+    edge: Literal["left", "right", "top", "bottom"],
+    kind: MediaKind,
+) -> int:
+    vertical_edge = edge in {"left", "right"}
+    scan_length = width if vertical_edge else height
+    cross_length = height if vertical_edge else width
+    min_active = max(1, int(cross_length * _trim_min_active_ratio(kind)))
+    keep = max(TRIM_MIN_EDGE_PIXELS, int(scan_length * _trim_keep_ratio(kind)))
+    max_steps = min(scan_length, int(scan_length * _trim_max_edge_ratio(kind)))
+
+    for offset in range(max_steps):
+        if _edge_active_count(activity, width, height, edge, offset) >= min_active:
+            return max(0, offset - keep)
+    return 0
+
+
+def _edge_active_count(
+    activity: tuple[bool, ...],
+    width: int,
+    height: int,
+    edge: Literal["left", "right", "top", "bottom"],
+    offset: int,
+) -> int:
+    if edge == "left":
+        return sum(int(activity[(row * width) + offset]) for row in range(height))
+    if edge == "right":
+        column = width - 1 - offset
+        return sum(int(activity[(row * width) + column]) for row in range(height))
+    if edge == "top":
+        return sum(int(activity[(offset * width) + column]) for column in range(width))
+
+    row = height - 1 - offset
+    return sum(int(activity[(row * width) + column]) for column in range(width))
+
+
+def _map_scan_trim_to_box(
+    box: Box,
+    scan_size: tuple[int, int],
+    left: int,
+    right: int,
+    top: int,
+    bottom: int,
+    kind: MediaKind,
+) -> Box:
+    scan_width, scan_height = scan_size
+    max_trim_x = int(box.width * _trim_max_edge_ratio(kind))
+    max_trim_y = int(box.height * _trim_max_edge_ratio(kind))
+    left_trim = min(int(left * box.width / scan_width), max_trim_x)
+    right_trim = min(int(right * box.width / scan_width), max_trim_x)
+    top_trim = min(int(top * box.height / scan_height), max_trim_y)
+    bottom_trim = min(int(bottom * box.height / scan_height), max_trim_y)
+    trimmed = Box(
+        left=box.left + left_trim,
+        top=box.top + top_trim,
+        right=box.right - right_trim,
+        bottom=box.bottom - bottom_trim,
+    )
+    if trimmed.width < box.width * (1.0 - (2 * _trim_max_edge_ratio(kind))):
+        return box
+    if trimmed.height < box.height * (1.0 - (2 * _trim_max_edge_ratio(kind))):
+        return box
+    if trimmed.left >= trimmed.right or trimmed.top >= trimmed.bottom:
+        return box
+    return trimmed
+
+
+def _trim_max_edge_ratio(kind: MediaKind) -> float:
+    if kind == "portrait":
+        return PORTRAIT_TRIM_MAX_EDGE_RATIO
+    return SIGNATURE_TRIM_MAX_EDGE_RATIO
+
+
+def _trim_keep_ratio(kind: MediaKind) -> float:
+    if kind == "portrait":
+        return PORTRAIT_TRIM_KEEP_RATIO
+    return SIGNATURE_TRIM_KEEP_RATIO
+
+
+def _trim_min_active_ratio(kind: MediaKind) -> float:
+    if kind == "portrait":
+        return PORTRAIT_TRIM_MIN_ACTIVE_RATIO
+    return SIGNATURE_TRIM_MIN_ACTIVE_RATIO
 
 
 def _clamp_box(box: Box, image: Image.Image) -> Box:
