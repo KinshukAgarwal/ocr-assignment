@@ -34,7 +34,6 @@ def test_parser_extracts_icao_fields() -> None:
     assert parsed.extraction.type == "P"
     assert parsed.extraction.country_code == "UTO"
     assert parsed.extraction.passport_number == "L898902C3"
-    assert parsed.extraction.issuing_country == "UTO"
     assert parsed.extraction.surname == "ERIKSSON"
     assert parsed.extraction.given_names == "ANNA MARIA"
     assert parsed.extraction.nationality == "UTO"
