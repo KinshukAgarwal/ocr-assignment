@@ -6,7 +6,14 @@ from PIL import Image
 from passport_ocr_api.config import Settings
 from passport_ocr_api.errors import OcrFailedError, OcrTimeoutError, OcrUnavailableError
 from passport_ocr_api.logging_config import log_extra
-from passport_ocr_api.schemas import ConfidenceInfo, OcrInfo, OrientationInfo, PassportOcrResponse
+from passport_ocr_api.schemas import (
+    ConfidenceInfo,
+    OcrInfo,
+    OrientationInfo,
+    PassportExtraction,
+    PassportOcrResponse,
+    ValidationInfo,
+)
 from passport_ocr_api.services.document_loader import DocumentLoader
 from passport_ocr_api.services.orientation import OrientationCorrector
 from passport_ocr_api.services.types import (
@@ -19,6 +26,16 @@ from passport_ocr_api.services.types import (
 from passport_ocr_api.services.upload_validator import UploadedDocument
 
 logger = logging.getLogger(__name__)
+QUALITY_CRITICAL_FIELDS = (
+    "passport_number",
+    "surname",
+    "given_names",
+    "nationality",
+    "date_of_birth",
+    "date_of_expiry",
+    "mrz_line_1",
+    "mrz_line_2",
+)
 
 
 class PassportOcrPipeline:
@@ -53,19 +70,22 @@ class PassportOcrPipeline:
             return self._extract_with_cloud_only(first_page.image, request_id, started)
 
         parsed = self._parser.parse(orientation.local_ocr.text, orientation.local_ocr.confidence)
+        validation = self._validator.validate(parsed.extraction)
         fallback_result = self._fallback_if_needed(
             orientation.image,
             orientation.local_ocr,
             parsed.confidence,
+            parsed.extraction,
+            validation,
             request_id,
         )
 
         final_ocr = fallback_result or orientation.local_ocr
         if fallback_result is not None:
             parsed = self._parser.parse(final_ocr.text, final_ocr.confidence)
+            validation = self._validator.validate(parsed.extraction)
 
         images = self._image_extractor.extract(orientation.image)
-        validation = self._validator.validate(parsed.extraction)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             "passport ocr completed engine=%s fallback=%s confidence=%.3f elapsed_ms=%s",
@@ -147,6 +167,8 @@ class PassportOcrPipeline:
         image: Image.Image,
         local_ocr: OcrResult,
         parsed_confidence: float,
+        extraction: PassportExtraction,
+        validation: ValidationInfo,
         request_id: str,
     ) -> OcrResult | None:
         if not self._settings.google_fallback_enabled:
@@ -154,6 +176,8 @@ class PassportOcrPipeline:
         if (
             local_ocr.confidence >= self._settings.low_confidence_threshold
             and parsed_confidence >= self._settings.low_confidence_threshold
+            and validation.status == "passed"
+            and not _has_missing_quality_fields(extraction)
         ):
             return None
 
@@ -172,3 +196,7 @@ class PassportOcrPipeline:
             if snippet:
                 snippets.append(snippet)
         return snippets
+
+
+def _has_missing_quality_fields(extraction: PassportExtraction) -> bool:
+    return any(getattr(extraction, field) is None for field in QUALITY_CRITICAL_FIELDS)

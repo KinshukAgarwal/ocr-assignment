@@ -12,6 +12,7 @@ from passport_ocr_api.services.mrz_parser import score_passport_text
 from passport_ocr_api.services.types import OcrLine, OcrResult
 
 TESSERACT_CONFIG = "--oem 3 --psm 6"
+SPARSE_TEXT_TESSERACT_CONFIG = "--oem 3 --psm 11"
 MRZ_TESSERACT_CONFIG = (
     "--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
 )
@@ -194,6 +195,7 @@ def _average_confidence(values: list[float]) -> float:
 def _ocr_variants(image: Image.Image) -> tuple[OcrVariant, ...]:
     return (
         OcrVariant(image=image, config=TESSERACT_CONFIG),
+        OcrVariant(image=image, config=SPARSE_TEXT_TESSERACT_CONFIG),
         OcrVariant(image=_preprocess_mrz_image(image), config=MRZ_TESSERACT_CONFIG),
         OcrVariant(image=_preprocess_mrz_band_image(image), config=MRZ_TESSERACT_CONFIG),
     )

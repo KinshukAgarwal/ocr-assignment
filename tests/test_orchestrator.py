@@ -45,15 +45,18 @@ class FakeParser:
 
     def parse(self, text: str, confidence_hint: float) -> ParsedPassport:
         return ParsedPassport(
-            extraction=PassportExtraction(passport_number="A1234567"),
+            extraction=_complete_extraction(),
             confidence=self.confidence,
             field_confidence={"passport_number": self.confidence},
         )
 
 
 class FakeValidator:
+    def __init__(self, status: str = "passed") -> None:
+        self.status = status
+
     def validate(self, extraction: PassportExtraction) -> ValidationInfo:
-        return ValidationInfo(status="not_evaluated", issues=[])
+        return ValidationInfo(status=self.status, issues=[])
 
 
 class FakeImageExtractor:
@@ -127,6 +130,25 @@ def test_pipeline_uses_google_when_confidence_is_low() -> None:
     assert cloud.called is True
 
 
+def test_pipeline_uses_google_when_validation_is_not_passed() -> None:
+    cloud = FakeCloud()
+    pipeline = PassportOcrPipeline(
+        settings=Settings(google_fallback_enabled=True, low_confidence_threshold=0.7),
+        document_loader=FakeLoader(),  # type: ignore[arg-type]
+        orientation_corrector=FakeOrientation(_ocr_result(0.9)),  # type: ignore[arg-type]
+        parser=FakeParser(confidence=0.9),
+        validator=FakeValidator(status="not_evaluated"),
+        image_extractor=FakeImageExtractor(),
+        cloud_ocr=cloud,
+    )
+
+    response = pipeline.extract(_document(), request_id="req-1")
+
+    assert response.ocr.fallback_used is True
+    assert response.ocr.engine == "hybrid"
+    assert cloud.called is True
+
+
 def test_pipeline_uses_google_when_local_ocr_is_unavailable() -> None:
     cloud = FakeCloud()
     pipeline = PassportOcrPipeline(
@@ -158,3 +180,16 @@ def _ocr_result(confidence: float) -> OcrResult:
 
 def _document() -> UploadedDocument:
     return UploadedDocument(filename="x.png", content_type="image/png", data=b"x")
+
+
+def _complete_extraction() -> PassportExtraction:
+    return PassportExtraction(
+        passport_number="A1234567",
+        surname="ERIKSSON",
+        given_names="ANNA MARIA",
+        nationality="UTO",
+        date_of_birth="1974-08-12",
+        date_of_expiry="2012-04-15",
+        mrz_line_1="P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<",
+        mrz_line_2="L898902C36UTO7408122F1204159ZE184226B<<<<<10",
+    )
