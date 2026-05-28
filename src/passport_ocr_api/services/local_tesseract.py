@@ -17,6 +17,7 @@ MRZ_TESSERACT_CONFIG = (
 )
 MRZ_SCALE_FACTOR = 2
 MRZ_BINARY_THRESHOLD = 145
+MRZ_BAND_TOP_RATIO = 0.58
 MIN_JOINED_MRZ_LENGTH = 25
 MRZ_WORD_PATTERN = re.compile(r"^[A-Z0-9<]+$")
 
@@ -194,6 +195,7 @@ def _ocr_variants(image: Image.Image) -> tuple[OcrVariant, ...]:
     return (
         OcrVariant(image=image, config=TESSERACT_CONFIG),
         OcrVariant(image=_preprocess_mrz_image(image), config=MRZ_TESSERACT_CONFIG),
+        OcrVariant(image=_preprocess_mrz_band_image(image), config=MRZ_TESSERACT_CONFIG),
     )
 
 
@@ -205,6 +207,12 @@ def _preprocess_mrz_image(image: Image.Image) -> Image.Image:
     )
     thresholded = scaled.point(lambda pixel: 255 if pixel > MRZ_BINARY_THRESHOLD else 0)
     return thresholded.convert("RGB")
+
+
+def _preprocess_mrz_band_image(image: Image.Image) -> Image.Image:
+    top = int(image.height * MRZ_BAND_TOP_RATIO)
+    band = image.crop((0, top, image.width, image.height))
+    return _preprocess_mrz_image(band)
 
 
 def _ocr_quality_score(result: OcrResult) -> float:
