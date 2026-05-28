@@ -174,7 +174,6 @@ def _parse_td3_lines(line_1: str, line_2: str) -> PassportExtraction:
         type=_parse_document_type(line_1[0:1]),
         country_code=country_code,
         passport_number=_empty_to_none(line_2[0:9].replace("<", "")),
-        issuing_country=country_code,
         surname=surname,
         given_names=given_names,
         nationality=_normalize_country_code(line_2[10:13].replace("<", "")),
@@ -316,7 +315,6 @@ def _parse_visible_text(text: str) -> PassportExtraction:
         type=_find_visible_document_type(lines),
         country_code=country_code,
         passport_number=_find_visible_passport_number(lines),
-        issuing_country=country_code,
         surname=surname,
         given_names=given_names,
         nationality=_find_visible_nationality(lines),
@@ -622,10 +620,6 @@ def _merge_extractions(
     for field, visible_value in visible_data.items():
         if visible_value is not None and not field.startswith("mrz_line"):
             setattr(merged, field, visible_value)
-    if merged.country_code is None:
-        merged.country_code = merged.issuing_country
-    if merged.issuing_country is None:
-        merged.issuing_country = merged.country_code
     return merged
 
 
@@ -641,9 +635,7 @@ def _repair_mrz_lines_from_fields(extraction: PassportExtraction) -> PassportExt
 def _repair_returned_mrz_line_1(extraction: PassportExtraction) -> str:
     line = _pad_mrz(extraction.mrz_line_1 or "")
     document_type = _parse_document_type(extraction.type or line[0:1]) or "P"
-    country_code = _mrz_country_code(extraction.country_code) or _mrz_country_code(
-        extraction.issuing_country,
-    )
+    country_code = _mrz_country_code(extraction.country_code)
     if country_code is None:
         country_code = _normalize_country_code(line[2:5]) or line[2:5]
 

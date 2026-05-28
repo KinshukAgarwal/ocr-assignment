@@ -85,6 +85,7 @@ def test_api_extracts_passport_mrz_from_png_upload() -> None:
     body = response.json()
 
     assert response.status_code == HTTP_OK
+    assert "issuing_country" not in body["extraction"]
     assert body["extraction"]["passport_number"] == PASSPORT_NUMBER
     assert body["extraction"]["surname"] == SURNAME
     assert body["validation"]["status"] == "passed"

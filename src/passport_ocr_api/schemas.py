@@ -22,7 +22,6 @@ class PassportExtraction(BaseModel):
     type: str | None = None
     country_code: str | None = None
     passport_number: str | None = None
-    issuing_country: str | None = None
     surname: str | None = None
     given_names: str | None = None
     nationality: str | None = None
