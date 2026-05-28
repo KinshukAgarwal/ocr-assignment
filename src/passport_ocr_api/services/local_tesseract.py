@@ -8,6 +8,7 @@ from PIL import Image, ImageOps
 from pytesseract import Output, TesseractError, TesseractNotFoundError
 
 from passport_ocr_api.errors import OcrFailedError, OcrTimeoutError, OcrUnavailableError
+from passport_ocr_api.services.image_preprocessing import to_black_and_white_text_image
 from passport_ocr_api.services.mrz_parser import score_passport_text
 from passport_ocr_api.services.types import OcrLine, OcrResult
 
@@ -18,6 +19,7 @@ MRZ_TESSERACT_CONFIG = (
 MRZ_SCALE_FACTOR = 2
 MRZ_BINARY_THRESHOLD = 145
 MRZ_BAND_TOP_RATIO = 0.58
+FULL_PAGE_TEXT_BINARY_THRESHOLD = 100
 MIN_JOINED_MRZ_LENGTH = 25
 MRZ_WORD_PATTERN = re.compile(r"^[A-Z0-9<]+$")
 
@@ -193,7 +195,14 @@ def _average_confidence(values: list[float]) -> float:
 
 def _ocr_variants(image: Image.Image) -> tuple[OcrVariant, ...]:
     return (
-        OcrVariant(image=image, config=TESSERACT_CONFIG),
+        OcrVariant(
+            image=to_black_and_white_text_image(
+                image,
+                threshold=FULL_PAGE_TEXT_BINARY_THRESHOLD,
+            ),
+            config=TESSERACT_CONFIG,
+        ),
+        OcrVariant(image=to_black_and_white_text_image(image), config=TESSERACT_CONFIG),
         OcrVariant(image=_preprocess_mrz_image(image), config=MRZ_TESSERACT_CONFIG),
         OcrVariant(image=_preprocess_mrz_band_image(image), config=MRZ_TESSERACT_CONFIG),
     )

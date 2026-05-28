@@ -8,6 +8,7 @@ from passport_ocr_api.errors import OcrFailedError, OcrTimeoutError, OcrUnavaila
 from passport_ocr_api.logging_config import log_extra
 from passport_ocr_api.schemas import ConfidenceInfo, OcrInfo, OrientationInfo, PassportOcrResponse
 from passport_ocr_api.services.document_loader import DocumentLoader
+from passport_ocr_api.services.image_preprocessing import to_black_and_white_text_image
 from passport_ocr_api.services.orientation import OrientationCorrector
 from passport_ocr_api.services.types import (
     CloudOcrEngine,
@@ -19,6 +20,7 @@ from passport_ocr_api.services.types import (
 from passport_ocr_api.services.upload_validator import UploadedDocument
 
 logger = logging.getLogger(__name__)
+TEXT_FALLBACK_BINARY_THRESHOLD = 100
 
 
 class PassportOcrPipeline:
@@ -52,9 +54,14 @@ class PassportOcrPipeline:
             logger.warning("local ocr unavailable; using cloud fallback", **log_extra(request_id))
             return self._extract_with_cloud_only(first_page.image, request_id, started)
 
+        images = self._image_extractor.extract(orientation.image)
+        text_image = to_black_and_white_text_image(
+            orientation.image,
+            threshold=TEXT_FALLBACK_BINARY_THRESHOLD,
+        )
         parsed = self._parser.parse(orientation.local_ocr.text, orientation.local_ocr.confidence)
         fallback_result = self._fallback_if_needed(
-            orientation.image,
+            text_image,
             orientation.local_ocr,
             parsed.confidence,
             request_id,
@@ -64,7 +71,6 @@ class PassportOcrPipeline:
         if fallback_result is not None:
             parsed = self._parser.parse(final_ocr.text, final_ocr.confidence)
 
-        images = self._image_extractor.extract(orientation.image)
         validation = self._validator.validate(parsed.extraction)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
@@ -103,13 +109,17 @@ class PassportOcrPipeline:
         request_id: str,
         started: float,
     ) -> PassportOcrResponse:
-        cloud_ocr = self._cloud_ocr.extract(
+        images = self._image_extractor.extract(image)
+        text_image = to_black_and_white_text_image(
             image,
+            threshold=TEXT_FALLBACK_BINARY_THRESHOLD,
+        )
+        cloud_ocr = self._cloud_ocr.extract(
+            text_image,
             self._settings.google_ocr_timeout_seconds,
             request_id,
         )
         parsed = self._parser.parse(cloud_ocr.text, cloud_ocr.confidence)
-        images = self._image_extractor.extract(image)
         validation = self._validator.validate(parsed.extraction)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
